@@ -3,6 +3,9 @@ import json
 import pandas as pd
 import joblib
 from together import Together
+import csv
+import os
+from datetime import datetime
 
 # Server connection settings
 HOST = 'localhost'
@@ -32,6 +35,12 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
     s.connect((HOST, PORT))
     buffer = ""
     print("Client connected to server.\n")
+    
+    # Create CSV file with headers if it doesn't exist
+    if not os.path.exists("anomalies.csv"):
+        with open("anomalies.csv", "w", newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(["timestamp", "sensor_data", "llm_description"])
 
     while True:
         chunk = s.recv(1024).decode()
@@ -72,6 +81,11 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                         )
                         output = response.choices[0].message.content
                         print(f"\n🚨 Anomaly Labeled by LLM:\n{output}\n")
+
+                        # ✅ Log the anomaly in CSV file
+                        with open("anomalies.csv", "a", newline='') as f:
+                            writer = csv.writer(f)
+                            writer.writerow([datetime.now(), json.dumps(data), output])
 
                     except Exception as e:
                         print(f"❌ Error connecting to Together AI: {e}")
