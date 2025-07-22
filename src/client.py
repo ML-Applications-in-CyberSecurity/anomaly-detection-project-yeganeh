@@ -21,14 +21,20 @@ client = Together(api_key="8e9b1c3c1f9cd2c2a5cc0960e2b4c170c3488da122f662ef77633
 if not os.path.exists("anomalies.csv"):
     with open("anomalies.csv", "w", newline='') as f:
         writer = csv.writer(f)
-        writer.writerow(["timestamp", "sensor_data", "llm_description", "confidence_score"])
+        writer.writerow([
+            "timestamp",
+            "sensor_data",
+            "explanatory_output",
+            "technical_output",
+            "summary_output",
+            "confidence_score"
+        ])
 
 # Preprocess incoming data to match model input format
 def pre_process_data(data):
     df = pd.DataFrame([data])
     df = pd.get_dummies(df)
 
-    # Ensure required protocol columns are present
     for col in ['protocol_TCP', 'protocol_UDP']:
         if col not in df.columns:
             df[col] = 0
@@ -40,7 +46,7 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
     s.connect((HOST, PORT))
     buffer = ""
     print("✅ Client connected to server.\n")
-    
+
     while True:
         chunk = s.recv(1024).decode()
         if not chunk:
@@ -55,7 +61,6 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 prediction = model.predict(processed.values)[0]
                 score = model.decision_function(processed.values)[0]
 
-                # 🔸 Beautified terminal output
                 print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
                 print("📥  Incoming Sensor Data:")
                 for k, v in data.items():
@@ -65,40 +70,54 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 if prediction == -1:
                     print("\n🚨 Anomaly Detected! Sending to LLM...\n")
 
-                    # Construct message for the LLM
-                    messages = [
-                        {
-                            "role": "system",
-                            "content": "You are a helpful assistant that labels and explains sensor anomalies."
-                        },
-                        {
-                            "role": "user",
-                            "content": f"Sensor reading: {json.dumps(data)}\nDescribe the type of anomaly and suggest a possible cause."
-                        }
-                    ]
+                    # Define different prompt styles
+                    prompt_variants = {
+                        "explanatory": [
+                            {"role": "system", "content": "You are a helpful assistant that explains sensor anomalies."},
+                            {"role": "user", "content": f"Sensor reading: {json.dumps(data)}\nExplain what makes this anomalous and why it might happen."}
+                        ],
+                        "technical": [
+                            {"role": "system", "content": "You are a cybersecurity expert specialized in anomaly detection."},
+                            {"role": "user", "content": f"Analyze this input: {json.dumps(data)}.\nExplain in technical terms why this might be considered anomalous."}
+                        ],
+                        "summary": [
+                            {"role": "system", "content": "You are a concise summarizer of anomaly types."},
+                            {"role": "user", "content": f"Quickly label the type of anomaly in this data: {json.dumps(data)}"}
+                        ]
+                    }
 
-                    # Send the message to Together AI LLM
-                    try:
-                        response = client.chat.completions.create(
-                            model="deepseek-ai/DeepSeek-R1-Distill-Llama-70B-free",
-                            messages=messages,
-                            stream=False,
-                        )
-                        output = response.choices[0].message.content
+                    llm_outputs = {}
 
-                        print("🧠 LLM Response:")
-                        print(f"{output}")
-                        print("✅ Logged to anomalies.csv")
-                        print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+                    # Loop through each prompt type
+                    for prompt_type, messages in prompt_variants.items():
+                        try:
+                            response = client.chat.completions.create(
+                                model="deepseek-ai/DeepSeek-R1-Distill-Llama-70B-free",
+                                messages=messages,
+                                stream=False,
+                            )
+                            output = response.choices[0].message.content
+                            llm_outputs[prompt_type] = output
 
-                        # Log the anomaly in CSV file
-                        with open("anomalies.csv", "a", newline='') as f:
-                            writer = csv.writer(f)
-                            writer.writerow([datetime.now(), json.dumps(data), output, score])
+                            print(f"🤖 LLM Response [{prompt_type}]:\n{output}\n")
 
-                    except Exception as e:
-                        print(f"❌ Error connecting to Together AI: {e}")
-                        print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+                        except Exception as e:
+                            print(f"❌ Error for prompt '{prompt_type}': {e}")
+                            llm_outputs[prompt_type] = "ERROR"
+
+                    print("✅ All responses logged.\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+
+                    # Write to CSV
+                    with open("anomalies.csv", "a", newline='') as f:
+                        writer = csv.writer(f)
+                        writer.writerow([
+                            datetime.now(),
+                            json.dumps(data),
+                            llm_outputs.get("explanatory", ""),
+                            llm_outputs.get("technical", ""),
+                            llm_outputs.get("summary", ""),
+                            score
+                        ])
 
                 else:
                     print("✔️  No anomaly detected.")
