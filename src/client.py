@@ -24,10 +24,10 @@ if not os.path.exists("anomalies.csv"):
         writer.writerow([
             "timestamp",
             "sensor_data",
+            "confidence_score",
             "explanatory_output",
             "technical_output",
-            "summary_output",
-            "confidence_score"
+            "summary_output"
         ])
 
 # Preprocess incoming data to match model input format
@@ -35,11 +35,23 @@ def pre_process_data(data):
     df = pd.DataFrame([data])
     df = pd.get_dummies(df)
 
-    for col in ['protocol_TCP', 'protocol_UDP']:
+    # Ensure protocol columns exist
+    for col in ['protocol_TCP', 'protocol_UDP', 'protocol_UNKNOWN']:
         if col not in df.columns:
             df[col] = 0
 
-    return df[['src_port', 'dst_port', 'packet_size', 'duration_ms', 'protocol_TCP', 'protocol_UDP']]
+    # Add engineered features
+    df['packet_per_duration'] = df['packet_size'] / df['duration_ms']
+    df['is_suspicious_src_port'] = df['src_port'].isin([1337, 9999, 6666]).astype(int)
+    df['is_unknown_protocol'] = df.get('protocol_UNKNOWN', 0).astype(int)
+
+    # Return features in model training order
+    return df[[
+        'src_port', 'dst_port', 'packet_size', 'duration_ms',
+        'protocol_TCP', 'protocol_UDP', 'protocol_UNKNOWN',
+        'packet_per_duration', 'is_suspicious_src_port', 'is_unknown_protocol'
+    ]]
+
 
 # Start connection to the socket server
 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -113,10 +125,11 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                         writer.writerow([
                             datetime.now(),
                             json.dumps(data),
+                            score,
                             llm_outputs.get("explanatory", ""),
                             llm_outputs.get("technical", ""),
-                            llm_outputs.get("summary", ""),
-                            score
+                            llm_outputs.get("summary", "")
+                            
                         ])
 
                 else:
